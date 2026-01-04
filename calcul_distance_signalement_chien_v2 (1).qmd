@@ -1,0 +1,292 @@
+---
+title: "Analyse SIG"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-title: "Sommaire"
+    toc-location: left
+    toc-expand: true
+    number-sections: true
+    code-fold: show
+    code-tools: true
+    theme: cosmo
+    highlight-style: github
+    fig-width: 10
+    fig-height: 8
+    self-contained: true
+
+execute:
+  enabled: true
+  warning: false
+  message: false
+  echo: true
+
+engine: jupyter
+jupyter: python3
+---
+
+# Introduction
+
+::: {.callout-important title="Contexe de l'étude"}
+En France métropolitaine, les maladies vectorielles transmises par les tiques, et en particulier la borréliose de Lyme, constituent un enjeu croissant de santé publique. Entre 2019 et 2020, l’incidence de cette pathologie a augmenté de 20 %, atteignant plus de 60 000 cas annuels diagnostiqués **(CRMVT Paris-Région Nord)**.
+
+Cette évolution est étroitement liée aux effets du changement climatique, qui modifient les conditions bioclimatiques favorables au développement de la tique Ixodes ricinus, entraînant une extension spatiale de son aire de distribution et une prolongation de sa période d’activité sur le territoire métropolitain **(INRAE - Projet Climatick, 2024).**
+
+Dans ce contexte, ce travail vise à caractériser spatialement les « paysages de piqûre » afin d’approfondir la compréhension de l’écologie spatiale des tiques. L’objectif est d’identifier et de cartographier des profils paysagers associés aux zones de forte exposition.
+
+L’étude repose sur l’exploitation de la base de données Corine Land Cover (CLC) au sein d’un système d’information géographique (SIG), permettant l’extraction de métriques d’occupation du sol dans des buffers optimisés autour des points de signalement de piqûres.
+
+L’application de méthodes d’analyse multivariée conduit à la définition de typologies paysagères, offrant une confrontation objective entre les paysages analysés et les milieux déclarés, et contribuant ainsi à une meilleure compréhension spatiale de l’écologie des tiques.
+:::
+
+# configuration de workspace
+
+```{r eval=FALSE echo=FALSE }
+library(reticulate)
+
+py_require("pandas", action = "add")
+
+py_require("matplotlib", action = "add")
+
+py_require("seaborn", action = "add")
+
+py_require("jupyter", action = "add")
+
+py_require("geopandas", action = "add")
+
+
+```
+
+```{python}
+import pandas as pd
+import geopandas as gpd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+```
+
+# Traitement de données de signalements
+
+**Chargement de données CSV**
+
+```{python}
+## Lecture
+df = pd.read_csv('../inputs/distance_chats-chiens_export_temp_v4.csv', sep=";", header=0, encoding='latin1')
+#print(df.head())
+```
+
+**Conversion des types de variables "object" avec #N/D en float64**
+
+```{python}
+#import numpy as np
+
+# Remplacer les '#N/D' par NaN (optionnel si les valeurs ne sont pas reconnues automatiquement)
+#df['lat_dom'] = df['lat_dom'].replace('#N/D', np.nan) # semble optionnel
+
+# Convertir en float64
+df['lat_dom'] = pd.to_numeric(df['lat_dom'], errors='coerce')
+df['lon_dom'] = pd.to_numeric(df['lon_dom'], errors='coerce')
+df['distance(km)'] = pd.to_numeric(df['distance(km)'], errors='coerce')
+df['code_postal'] = pd.to_numeric(df['code_postal'], errors='coerce').astype('Int64')
+
+```
+
+**Vérifier les types de variables**
+
+```{python}
+print(df.dtypes)
+```
+
+**Correction de la variable 'environnement'**
+
+```{python}
+# Correction de la colonne 'environnement'
+df['environnement'] = df['environnement'].str.strip()  # supprimer les espaces en début/fin
+
+# Remplacer les valeurs vides ou nulles par 'Autre'
+df['environnement'] = df['environnement'].replace(["''", None], 'Autre')
+
+# Uniformiser les doublons / variations de texte
+df['environnement'] = df['environnement'].replace({
+    'Jardin privé': 'Jardin privé ou parc municipal',
+    'Jardin Privé': 'Jardin privé ou parc municipal',
+    'Jardin privé ou parc municipal': 'Jardin privé ou parc municipal',
+    'Prairie': 'Prairie',
+    'Parc urbain': 'Jardin privé ou parc municipal',
+    'Zone agricole cultivée': 'Zone agricole cultivée',
+    'Forêt': 'Forêt',
+    'Autre': 'Autre'
+})
+
+# Vérifier le résultat
+print(df['environnement'].value_counts())
+```
+
+**Sélection des enregistrements pour les chiens**
+
+```{python}
+## Filtrage sur le données de chien
+df_dog = df[df['qui_pique'] == 'Chien']
+df_dog.shape
+```
+
+**Compte des valeurs non manquantes par colonne**
+
+```{python}
+# Compte des valeurs non manquantes par colonne
+nb_enregistrements_par_col = df_dog.count()
+print(nb_enregistrements_par_col)
+```
+
+# Calcul de la distance moyenne entre domicile et lieu des piqûres pour les chiens
+
+**Extraction des distances pour les chiens**
+
+```{python}
+## Extraire les distances pour les chiens
+
+dist_chiens = df_dog.loc[df['qui_pique'] == 'Chien', 'distance(km)'].dropna()
+
+
+## Calcul des déciles
+
+deciles_chiens = np.percentile(dist_chiens, np.arange(0, 110, 10))
+
+# Arrondi à 2 chiffre décimal
+
+deciles_chiens = np.round(deciles_chiens, 2)
+
+# Création d'un DataFrame pour le tableau
+tableau_deciles = pd.DataFrame({
+    'Percentile (%)': np.arange(0, 110, 10),
+    'Distance (km)': deciles_chiens
+})
+
+print(tableau_deciles)
+```
+
+::: {.callout-tip title="Analyse de la distribution des distances moyennes"}
+L’analyse des percentiles de la distance moyenne met en évidence une distribution fortement asymétrique à droite. La majorité des observations correspond à des distances très courtes : la médiane est de 0,83 km et 70 % des distances sont inférieures à 2,36 km. Cette concentration près de zéro indique que le comportement dominant est celui de déplacements de courte portée.
+
+En revanche, la présence de valeurs très élevées dans la partie supérieure de la distribution entraîne un étalement important. Alors que le 90ᵉ percentile atteint seulement 7,72 km, la valeur maximale observée s’élève à 834,19 km, révélant l’existence de cas rares et extrêmes.
+
+Ces valeurs extrêmes influencent fortement la moyenne, qui devient peu représentative de la distance typique parcourue. Dans ce contexte, l’utilisation de la médiane et des percentiles apparaît plus pertinente pour décrire le comportement central de la population étudiée.
+:::
+
+**Comparaison de la distance moyenne sur 10 déciles et les 9 premiers déciles**
+
+```{python}
+## Moyenne de la distance totale pour les chiens
+
+moyenne_chiens_10D = df_dog.loc[df_dog['qui_pique'] == 'Chien', 'distance(km)'].mean()
+
+## Moyenne de la distance sur les 9 premiers déciles pour les chiens
+
+# 1. Calcul du 9e décile
+neuvieme_decile = np.percentile(dist_chiens, 90)
+
+# 2. Calcul de la moyenne sur les 9 premiers déciles
+moyenne_chiens_9D = df_dog.loc[df_dog['distance(km)'] <= neuvieme_decile, 'distance(km)'].mean()
+
+print(f"Moyenne distance pour chiens (10 déciles) : {round(moyenne_chiens_10D,3)} km")
+print(f"Moyenne distance pour chiens (9 déciles) : {round(moyenne_chiens_9D,3)} km")
+
+```
+
+::: {.callout-tip title="Synthèse de distances moyennes"}
+La comparaison des distances moyennes calculées sur l’ensemble des déciles et sur les neuf premiers déciles met en évidence une différence substantielle. La distance moyenne incluant l’ensemble des observations s’élève à 8,419 km, tandis que celle calculée après exclusion du dixième décile est limitée à 1,383 km.
+
+Cet écart marqué révèle une forte sensibilité de la moyenne aux valeurs extrêmes. En effet, les observations appartenant au dixième décile, correspondant aux 10 % de distances les plus élevées, exercent une influence disproportionnée sur la valeur moyenne globale.
+
+Ces résultats confirment l’existence d’une distribution fortement asymétrique, dominée par une majorité d’observations de faible amplitude et une minorité de valeurs exceptionnellement élevées.
+
+Ainsi, les distances associées aux neuf premiers déciles apparaissent relativement homogènes et reflètent plus fidèlement le comportement typique de la population étudiée.
+
+Compte tenu de l’influence disproportionnée du dernier décile sur la moyenne, nous privilégions la moyenne tronquée aux 90% pour calculer rayon de 1.383 km autour de signalements des piqures de tique sur les chiens en France métropolitaine.
+:::
+
+# Geotraitement de données de signalements
+
+## Tranformation de DataFrame en GeoDataFrame
+
+**Création du GeoDataFrame avec géométrie**
+
+```{python}
+gdf_dog = gpd.GeoDataFrame(
+    df_dog,
+    geometry=gpd.points_from_xy(df_dog['lon_piq'], df_dog['lat_piq']),
+    crs="EPSG:4326"
+)
+```
+
+**Reprojection du GeoDataFrame en Lambert-93**
+
+```{python}
+
+gdf_dog_l93=gdf_dog.to_crs('EPSG:2154')
+```
+
+**Création de zone tampon de 1.300 km**
+
+```{python}
+# création de la nouvelle colonne (rayon)
+gdf_dog_l93['rayon_m']=gdf_dog_l93.buffer(1300)
+```
+
+## Conversion de points en polygons
+
+**Définir rayon_m comme géométrie principale**
+
+```{python}
+gdf_dog_l93['geometry'] = gdf_dog_l93['rayon_m']
+```
+
+**Vérification**
+
+```{python}
+print(gdf_dog_l93.geometry.head())
+print(gdf_dog_l93.geom_type.unique())
+
+```
+
+**Suppression de la colonne rayon_m**
+
+```{python}
+#  
+gdf_dog_l93 = gdf_dog_l93.drop(columns='rayon_m')
+```
+
+**Verifier les valeurs non maquantes**
+
+```{python}
+gdf_dog_l93.count()
+```
+
+## Export en format shapefile
+
+**Renommer les colonnes avant export (pour rester lisible)**
+
+```{python}
+gdf_dog_l93 = gdf_dog_l93.rename(columns={
+    'distance(km)': 'dist_km',
+    'date_piqure_saisie': 'date_piq',
+    'precision_geo': 'precision',
+    'environnement': 'environ',
+    'code_postal': 'code_post',
+    'temperaturemin': 'temp_min',
+    'temperaturemax': 'temp_max'
+})
+```
+
+**Definition de dossier de sauvegarde**
+
+```{python}
+outputs='../outputs/rayon_chiens_1300m.shp'
+```
+
+**Sauvergarde en format SHP**
+
+```{python}
+gdf_dog_l93.to_file(outputs, driver='ESRI Shapefile')
+```
