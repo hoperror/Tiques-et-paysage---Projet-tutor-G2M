@@ -1,0 +1,1297 @@
+---
+title: "Qualifier les signalements de piqûres de tiques par analyses multivariées des données paysagères"
+subtitle: "Analyse multivariée des paysages de piqûres de tiques avec CLC 2018"
+author: "Djibril, Lucas, Samuel"
+
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    toc-title: "Sommaire"
+    toc-location: left      # ← arborescence à gauche
+    toc-expand: true        # optionnel : déplie les sections
+    number-sections: true
+    code-fold: show
+    code-tools: true
+    theme: cosmo
+    highlight-style: github
+    fig-width: 10
+    fig-height: 8
+    self-contained: true
+    callout-icon: false
+execute:
+  warning: false
+  message: false
+  echo: false
+
+editor: 
+  markdown: 
+    wrap: 72
+---
+
+**Introduction**
+
+::: {.callout-important title="Contexe de l'étude"}
+
+En France métropolitaine, les maladies vectorielles transmises par les tiques, et en particulier la borréliose de Lyme, constituent un enjeu croissant de santé publique. Entre 2019 et 2020, l’incidence de cette pathologie a augmenté de 20 %, atteignant plus de 60 000 cas annuels diagnostiqués **(CRMVT Paris-Région Nord)**. 
+
+Cette évolution est étroitement liée aux effets du changement climatique, qui modifient les conditions bioclimatiques favorables au développement de la tique Ixodes ricinus, entraînant une extension spatiale de son aire de distribution et une prolongation de sa période d’activité sur le territoire métropolitain **(INRAE - Projet Climatick, 2024).**
+
+Dans ce contexte, ce travail vise à caractériser spatialement les « paysages de piqûre » afin d’approfondir la compréhension de l’écologie spatiale des tiques. L’objectif est d’identifier et de cartographier des profils paysagers associés aux zones de forte exposition.
+
+L’étude repose sur l’exploitation de la base de données Corine Land Cover (CLC) au sein d’un système d’information géographique (SIG), permettant l’extraction de métriques d’occupation du sol dans des buffers optimisés autour des points de signalement de piqûres. 
+
+L’application de méthodes d’analyse multivariée conduit à la définition de typologies paysagères, offrant une confrontation objective entre les paysages analysés et les milieux déclarés, et contribuant ainsi à une meilleure compréhension spatiale de l’écologie des tiques.
+
+:::
+# Détermination de l'emprise optimale autour de point de piqûre
+
+##configuration de workspace
+
+```{r eval=FALSE}
+library(reticulate)
+
+py_require("pandas", action = "add")
+
+py_require("matplotlib", action = "add")
+
+py_require("seaborn", action = "add")
+
+py_require("jupyter", action = "add")
+
+py_require("geopandas", action = "add")
+
+
+```
+
+```{python}
+import pandas as pd
+import geopandas as gpd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+```
+
+## Nettoyage de données
+
+**Chargement de données CSV**
+
+```{python}
+## Lecture
+df = pd.read_csv('../inputs/distance_chats-chiens_export_temp_v4.csv', sep=";", header=0, encoding='latin1')
+#print(df.head())
+```
+
+**Conversion des types de variables "object" avec #N/D en float64**
+
+```{python}
+#import numpy as np
+
+# Remplacer les '#N/D' par NaN (optionnel si les valeurs ne sont pas reconnues automatiquement)
+#df['lat_dom'] = df['lat_dom'].replace('#N/D', np.nan) # semble optionnel
+
+# Convertir en float64
+df['lat_dom'] = pd.to_numeric(df['lat_dom'], errors='coerce')
+df['lon_dom'] = pd.to_numeric(df['lon_dom'], errors='coerce')
+df['distance(km)'] = pd.to_numeric(df['distance(km)'], errors='coerce')
+df['code_postal'] = pd.to_numeric(df['code_postal'], errors='coerce').astype('Int64')
+
+```
+
+**Vérifier les types de variables**
+
+```{python}
+print(df.dtypes)
+```
+
+**Correction de la variable 'environnement'**
+
+```{python}
+# Correction de la colonne 'environnement'
+df['environnement'] = df['environnement'].str.strip()  # supprimer les espaces en début/fin
+
+# Remplacer les valeurs vides ou nulles par 'Autre'
+df['environnement'] = df['environnement'].replace(["''", None], 'Autre')
+
+# Uniformiser les doublons / variations de texte
+df['environnement'] = df['environnement'].replace({
+    'Jardin privé': 'Jardin privé ou parc municipal',
+    'Jardin Privé': 'Jardin privé ou parc municipal',
+    'Jardin privé ou parc municipal': 'Jardin privé ou parc municipal',
+    'Prairie': 'Prairie',
+    'Parc urbain': 'Jardin privé ou parc municipal',
+    'Zone agricole cultivée': 'Zone agricole cultivée',
+    'Forêt': 'Forêt',
+    'Autre': 'Autre'
+})
+
+# Vérifier le résultat
+print(df['environnement'].value_counts())
+```
+
+**Sélection des enregistrements pour les chiens**
+
+```{python}
+## Filtrage sur le données de chien
+df_dog = df[df['qui_pique'] == 'Chien']
+df_dog.shape
+```
+
+**Compte des valeurs non manquantes par colonne**
+
+```{python}
+# Compte des valeurs non manquantes par colonne
+nb_enregistrements_par_col = df_dog.count()
+print(nb_enregistrements_par_col)
+```
+
+## Distance moyenne entre domicile et lieu des piqûres pour les chiens
+
+**Extraction des distances pour les chiens**
+
+```{python}
+## Extraire les distances pour les chiens
+
+dist_chiens = df_dog.loc[df['qui_pique'] == 'Chien', 'distance(km)'].dropna()
+
+
+## Calcul des déciles
+
+deciles_chiens = np.percentile(dist_chiens, np.arange(0, 110, 10))
+
+# Arrondi à 2 chiffre décimal
+
+deciles_chiens = np.round(deciles_chiens, 2)
+
+# Création d'un DataFrame pour le tableau
+tableau_deciles = pd.DataFrame({
+    'Percentile (%)': np.arange(0, 110, 10),
+    'Distance (km)': deciles_chiens
+})
+
+print(tableau_deciles)
+```
+
+::: {.callout-tip title="Analyse de la distribution des distances moyennes"}
+L’analyse des percentiles de la distance moyenne met en évidence une distribution fortement asymétrique à droite. La majorité des observations correspond à des distances très courtes : la médiane est de 0,83 km et 70 % des distances sont inférieures à 2,36 km. Cette concentration près de zéro indique que le comportement dominant est celui de déplacements de courte portée.
+
+En revanche, la présence de valeurs très élevées dans la partie supérieure de la distribution entraîne un étalement important. Alors que le 90ᵉ percentile atteint seulement 7,72 km, la valeur maximale observée s’élève à 834,19 km, révélant l’existence de cas rares et extrêmes.
+
+Ces valeurs extrêmes influencent fortement la moyenne, qui devient peu représentative de la distance typique parcourue. Dans ce contexte, l’utilisation de la médiane et des percentiles apparaît plus pertinente pour décrire le comportement central de la population étudiée.
+:::
+
+**Comparaison de la distance moyenne sur 10 déciles et les 9 premiers déciles**
+
+```{python}
+## Moyenne de la distance totale pour les chiens
+
+moyenne_chiens_10D = df_dog.loc[df_dog['qui_pique'] == 'Chien', 'distance(km)'].mean()
+
+## Moyenne de la distance sur les 9 premiers déciles pour les chiens
+
+# 1. Calcul du 9e décile
+neuvieme_decile = np.percentile(dist_chiens, 90)
+
+# 2. Calcul de la moyenne sur les 9 premiers déciles
+moyenne_chiens_9D = df_dog.loc[df_dog['distance(km)'] <= neuvieme_decile, 'distance(km)'].mean()
+
+print(f"Moyenne distance pour chiens (10 déciles) : {round(moyenne_chiens_10D,3)} km")
+print(f"Moyenne distance pour chiens (9 déciles) : {round(moyenne_chiens_9D,3)} km")
+
+```
+
+::: {.callout-tip title="Synthèse de distances moyennes"}
+La comparaison des distances moyennes calculées sur l’ensemble des déciles et sur les neuf premiers déciles met en évidence une différence substantielle. La distance moyenne incluant l’ensemble des observations s’élève à 8,419 km, tandis que celle calculée après exclusion du dixième décile est limitée à 1,383 km.
+
+Cet écart marqué révèle une forte sensibilité de la moyenne aux valeurs extrêmes. En effet, les observations appartenant au dixième décile, correspondant aux 10 % de distances les plus élevées, exercent une influence disproportionnée sur la valeur moyenne globale.
+
+Ces résultats confirment l’existence d’une distribution fortement asymétrique, dominée par une majorité d’observations de faible amplitude et une minorité de valeurs exceptionnellement élevées.
+
+Ainsi, les distances associées aux neuf premiers déciles apparaissent relativement homogènes et reflètent plus fidèlement le comportement typique de la population étudiée.
+
+Compte tenu de l’influence disproportionnée du dernier décile sur la moyenne, nous privilégions la moyenne tronquée aux 90% pour calculer rayon de 1.383 km autour de signalements des piqures de tique sur les chiens en France métropolitaine.
+:::
+
+## Geotraitement de données de signalements
+
+**Création du GeoDataFrame avec géométrie**
+
+```{python}
+gdf_dog = gpd.GeoDataFrame(
+    df_dog,
+    geometry=gpd.points_from_xy(df_dog['lon_piq'], df_dog['lat_piq']),
+    crs="EPSG:4326"
+)
+```
+
+**Reprojection du GeoDataFrame en Lambert-93**
+
+```{python}
+
+gdf_dog_l93=gdf_dog.to_crs('EPSG:2154')
+```
+
+**Création de zone tampon de 1.300 km**
+
+```{python}
+# création de la nouvelle colonne (rayon)
+gdf_dog_l93['rayon_m']=gdf_dog_l93.buffer(1300)
+```
+
+## Conversion de points en polygons
+
+**Définir rayon_m comme géométrie principale**
+
+```{python}
+gdf_dog_l93['geometry'] = gdf_dog_l93['rayon_m']
+```
+
+**Vérification**
+
+```{python}
+print(gdf_dog_l93.geometry.head())
+print(gdf_dog_l93.geom_type.unique())
+
+```
+
+**Suppression de la colonne rayon_m**
+
+```{python}
+#  
+gdf_dog_l93 = gdf_dog_l93.drop(columns='rayon_m')
+```
+
+**Verifier les valeurs non maquantes**
+
+```{python}
+gdf_dog_l93.count()
+```
+
+## Export en format shapefile
+
+**Renommer les colonnes avant export (pour rester lisible)**
+
+```{python}
+gdf_dog_l93 = gdf_dog_l93.rename(columns={
+    'distance(km)': 'dist_km',
+    'date_piqure_saisie': 'date_piq',
+    'precision_geo': 'precision',
+    'environnement': 'environ',
+    'code_postal': 'code_post',
+    'temperaturemin': 'temp_min',
+    'temperaturemax': 'temp_max'
+})
+```
+
+**Definition de dossier de sauvegarde**
+
+```{python}
+outputs='../outputs/rayon_chiens_1300m.shp'
+```
+
+**Sauvergarde en format SHP**
+
+```{python}
+gdf_dog_l93.to_file(outputs, driver='ESRI Shapefile')
+```
+
+
+# Analyse multivariée de l'occupation du sol
+
+## Installation et chargement des packages
+
+```{r setup}
+# Liste des packages nécessaires
+pkgs <- c(
+  "sf", "terra", "exactextractr", "FactoMineR", "cluster",
+  "factoextra", "dplyr", "tidyr", "ggplot2", "tmap",
+  "knitr", "patchwork"
+)
+
+# Installation automatique si nécessaire
+to_install <- setdiff(pkgs, rownames(installed.packages()))
+if (length(to_install)) {
+  install.packages(to_install, repos = "https://cloud.r-project.org")
+}
+
+# Chargement des bibliothèques
+library(sf)
+library(terra)
+library(exactextractr)
+library(FactoMineR)
+library(factoextra)
+library(cluster)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(tmap)
+library(knitr)
+library(patchwork)
+```
+
+## Chargement du raster CLC+ (EPSG:3035)
+
+```{r load-raster}
+# Chemin vers le raster
+raster_path <- "C:/Users/geographie/Documents/Master-G2M/M2-G2M/Ptut_VG_B/processing/inputs/CLCplus_2018_010m.tif"
+raster_clc <- rast(raster_path)
+
+# Définition WKT pour EPSG:3035 (ETRS89 / LAEA Europe)
+wkt3035 <- 'PROJCRS["ETRS89-extended / LAEA Europe",
+  BASEGEOGCRS["ETRS89",
+    DATUM["European Terrestrial Reference System 1989",
+      ELLIPSOID["GRS 1980",6378137,298.257222101]],
+    PRIMEM["Greenwich",0]],
+  CONVERSION["Lambert Azimuthal Equal Area",
+    METHOD["Lambert Azimuthal Equal Area"],
+    PARAMETER["Latitude of natural origin",52],
+    PARAMETER["Longitude of natural origin",10],
+    PARAMETER["False easting",4321000],
+    PARAMETER["False northing",3210000]],
+  CS[Cartesian,2],
+    AXIS["easting (X)",east],
+    AXIS["northing (Y)",north],
+    LENGTHUNIT["metre",1],
+  ID["EPSG",3035]]'
+
+# Assigner la projection si manquante
+if (is.na(crs(raster_clc)) || crs(raster_clc) == "") {
+  crs(raster_clc) <- wkt3035
+}
+
+# Vérifications
+cat("📊 Résolution:", res(raster_clc), "m\n")
+cat("🗺️  Projection:", as.character(crs(raster_clc, proj = TRUE)), "\n")
+```
+
+## Chargement de points signalement de piqure de tique sur le chien
+
+```{r load-signalements}
+# Lecture du shapefile des signalements
+signalements <- st_read("C:/Users/geographie/Documents/Master-G2M/M2-G2M/Ptut_VG_B/processing/outputs/rayon_chiens_1300m.shp", quiet = TRUE)
+
+# Reprojection vers EPSG:3035 si nécessaire
+if (st_crs(signalements) != crs(raster_clc)) {
+  signalements <- st_transform(signalements, crs(raster_clc))
+}
+
+cat("🏘️  Nombre de signalements:", nrow(signalements), "\n")
+```
+
+## Extraction des statistiques par signalements
+
+Extraction du pourcentage de chaque classe CLC+ par signalements avec
+`exactextractr`.
+
+```{r extract-stats}
+results_df <- exactextractr::exact_extract(
+  raster_clc,
+  signalements,
+  fun = function(values, coverage_fractions) {
+    # Création d'un dataframe valeurs × poids
+    df <- data.frame(val = values, w = coverage_fractions)
+
+    # Filtrer uniquement les classes CLC+ valides (1-11)
+    df <- df[!is.na(df$val) & df$val %in% 1:11, ]
+
+    # Si aucune donnée, retourner des zéros
+    if (nrow(df) == 0) return(rep(0, 11))
+
+    # Agréger par classe et calculer les pourcentages
+    agg <- aggregate(w ~ val, df, sum)
+    pct <- numeric(11)
+    pct[agg$val] <- 100 * agg$w / sum(agg$w)
+
+    return(pct)
+  },
+  progress = FALSE
+)
+```
+
+## Assemblage des résultats
+
+```{r assemble-results}
+# Vérifier si transposition nécessaire
+if (is.matrix(results_df) &&
+    nrow(results_df) == 11 &&
+    ncol(results_df) == nrow(signalements)) {
+  results_df <- t(results_df)
+}
+
+# Conversion en data.frame
+results_df <- as.data.frame(results_df)
+colnames(results_df) <- paste0("class_", 1:11)
+rownames(results_df) <- NULL
+
+# Vérification des dimensions
+stopifnot(nrow(results_df) == nrow(signalements))
+
+# Fusion avec les données communales
+signalements_clc <- dplyr::bind_cols(signalements, results_df)
+
+# Aplatissement des colonnes si nécessaire (format liste)
+class_cols <- paste0("class_", 1:11)
+for (cc in class_cols) {
+  x <- signalements_clc[[cc]]
+  if (is.list(x)) x <- unlist(x, recursive = TRUE, use.names = FALSE)
+  x <- suppressWarnings(as.numeric(x))
+  if (length(x) < nrow(signalements_clc)) {
+    x <- rep_len(x, nrow(signalements_clc))
+  }
+  signalements_clc[[cc]] <- x
+}
+
+cat("✅ Extraction terminée pour", nrow(signalements_clc), "signalements\n")
+```
+
+## Taux de couverture moyenne par clc
+
+```{r}
+clc_labels <- c(
+  "Surfaces arti.",
+  "Feuillus",
+  "Conifères",
+  "Forêts mixtes",
+  "Arbustive/herbacée",
+  "Prairies",
+  "Cultures",
+  "Zones humides int.",
+  "Zones humides côt.",
+  "Plans d'eau",
+  "Espaces marins"
+)
+```
+
+
+```{r stats-global}
+library(sf)
+library(dplyr)
+library(knitr)
+library(kableExtra)
+
+# ── Labels CLC ─────────────────────────────────────────────
+clc_labels <- c(
+  "1. Surfaces artificialisées",
+  "2. Forêts de feuillus",
+  "3. Forêts de conifères",
+  "4. Forêts mixtes",
+  "5. Végétation arbustive/herbacée",
+  "6. Prairies",
+  "7. Terres arables / Cultures",
+  "8. Zones humides intérieures",
+  "9. Zones humides côtières",
+  "10. Plans d'eau",
+  "11. Espaces marins"
+)
+
+# ── Calcul des moyennes par classe CLC (%) ─────────────────
+moyennes_vec <- signalements_clc |>
+  st_drop_geometry() |>
+  select(starts_with("class_")) |>
+  summarise(across(everything(), ~ mean(.x, na.rm = TRUE))) |>
+  unlist(use.names = FALSE)
+
+# ── Vérification de cohérence ──────────────────────────────
+stopifnot(length(moyennes_vec) == length(clc_labels))
+
+# ── Tableau final ──────────────────────────────────────────
+df_tab <- tibble::tibble(
+  Classe  = clc_labels,
+  Moyenne = round(moyennes_vec, 2)
+)
+
+# ── Tableau stylisé (tri décroissant) ──────────────────────
+df_tab |>
+  arrange(desc(Moyenne)) |>
+  kable(
+    align = c("l", "r"),
+    col.names = c("Type d'occupation du sol", "Moyenne (%)"),
+    caption = "📈 Statistiques moyennes par classe CLC"
+  ) |>
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = FALSE,
+    position = "left",
+    font_size = 14
+  ) 
+```
+
+::: {.callout-tip title="Analyse de taux de couverture par classe CLC 2018"}
+L'analyse de la répartition moyenne des classes d'occupation du sol dans
+les rayon de 1,3 km autour de point de signalement de piqûre de tique
+révèle trois points majeurs :
+
+-   Dominance des milieux ouverts et forestiers : Le territoire est
+    majoritairement marqué par les forêts de conifères (29,48 %) et les
+    prairies (25,75 %). À elles seules, ces deux classes représentent
+    plus de la moitié de la surface moyenne étudiée, suggérant un
+    paysage à forte composante naturelle ou semi-naturelle.
+
+-   Empreinte humaine significative : Les activités humaines occupent
+    une place importante avec un équilibre quasi parfait entre les
+    terres arables/cultures (16,51 %) et les surfaces artificialisées
+    (16,30 %). Ce taux d'artificialisation est relativement élevé,
+    indiquant une présence urbaine notable.
+
+-   Marginalité des milieux humides et mixtes : Les zones humides
+    (intérieures et côtières), les espaces marins et les forêts mixtes
+    sont quasi absents ou très localisés (proches de 0 %). De même, les
+    forêts de feuillus (7,66 %) sont nettement moins représentées que
+    les conifères, ce qui peut refléter une spécificité biogéographique
+    ou une gestion forestière ciblée.
+
+-   Grossomodo, il s'agit d'un territoire contrasté, dominé par un duo
+    "Conifères-Prairies", mais soumis à une pression anthropique
+    (urbaine et agricole) qui couvre un tiers de la surface totale.
+:::
+
+**Conversion de polygon vers point**
+
+```{r}
+signalements_clc <- suppressWarnings(
+  signalements_clc %>% st_centroid()
+)
+
+```
+
+## Analyse en Composantes Principales (ACP)
+
+### Calcul de l'ACP
+
+```{r pca-compute}
+# Extraction des données pour l'ACP (sans géométrie)
+data_pca <- signalements_clc %>%
+  st_drop_geometry() %>%
+  select(all_of(class_cols))
+
+# ACP avec centrage et réduction
+pca_res <- PCA(data_pca, scale.unit = TRUE, graph = FALSE)
+
+# Résumé de la variance expliquée
+cat("🔍 Variance expliquée par les 5 premiers axes (%):\n")
+print(round(pca_res$eig[1:5, 2], 2))
+cat("\n📊 Variance cumulée (5 axes):",
+    round(pca_res$eig[5, 3], 2), "%\n")
+
+```
+
+## Éboulis des valeurs propres
+
+```{r pca-scree}
+p_scree <- fviz_eig(
+  pca_res,
+  addlabels = TRUE,
+  barfill = "#2E86AB",
+  barcolor = "#1B4F72",
+  linecolor = "grey40",
+  ncp = 7,
+  main = "Éboulis des valeurs propres",
+  xlab = "Composante principale",
+  ylab = "% de variance expliquée"
+)
+print(p_scree)
+
+```
+
+### Cercle des corrélations
+
+```{r}
+# Tes labels sans clés
+clc_labels <- c(
+  "Surfaces arti.",
+  "Feuillus",
+  "Conifères",
+  "Forêts mixtes",
+  "Arbustive/herbacée",
+  "Prairies",
+  "Cultures",
+  "Zones humides int.",
+  "Zones humides côt.",
+  "Plans d'eau",
+  "Espaces marins"
+)
+
+# 🔄 1. Remplacer les noms des variables dans les résultats PCA
+colnames(pca_res$var$coord)   # juste pour vérifier
+rownames(pca_res$var$coord) <- clc_labels
+rownames(pca_res$var$contrib) <- clc_labels
+rownames(pca_res$var$cos2)    <- clc_labels
+
+# 🔵 2. Tracer le cercle des corrélations
+p_circle <- fviz_pca_var(
+  pca_res,
+  col.var = "contrib",
+  gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+  repel = TRUE,
+  title = "Cercle des corrélations (axes 1 et 2)"
+)
+
+print(p_circle)
+
+```
+
+### Contributions des variables
+
+```{r pca-contrib, fig.width=12, fig.height=5}
+p_contrib1 <- fviz_contrib(pca_res, choice = "var", axes = 1, top = 11) +
+  labs(title = "Contributions à l'axe 1")
+p_contrib2 <- fviz_contrib(pca_res, choice = "var", axes = 2, top = 11) +
+  labs(title = "Contributions à l'axe 2")
+
+print(p_contrib1 | p_contrib2)
+```
+
+### Tableau de corrélation PCA et clases CLC
+
+```{r loadings_table, results='asis'}
+# Charger les bibliothèques nécessaires
+library(knitr)
+library(kableExtra)
+library(dplyr)
+library(tibble)
+
+# Vérifier que pca_res existe et a la structure attendue
+if (!exists("pca_res") || !("var" %in% names(pca_res)) || !("coord" %in% names(pca_res$var))) {
+  stop("pca_res$var$coord n'existe pas. Vérifiez votre objet PCA.")
+}
+
+# Préparation des données
+loadings <- as.data.frame(round(pca_res$var$coord[, 1:5], 3)) %>%
+  rownames_to_column("Variable") # Ajoute les noms des variables comme colonne explicite
+
+# Création du tableau formaté
+loadings %>%
+  kable(
+    caption = "📊 Corrélations entre les classes et les 5 premiers axes",
+    col.names = c("Variable", "Axe 1", "Axe 2", "Axe 3", "Axe 4", "Axe 5"),
+    digits = 3,
+    align = c("l", rep("r", 5))
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("condensed", "striped", "hover"),
+    full_width = TRUE,
+    font_size = 12
+  ) %>%
+  row_spec(0, bold = TRUE, background = "#f0f0f0")
+
+```
+
+::: {.callout-tip title="Analyse des Axes de l'ACP (Occupation du Sol)"}
+
+Les axes présentés correspondent à des gradients d'occupation du sol
+issus de l'Analyse en Composantes Principales (ACP). Chaque axe oppose
+deux ensembles de milieux contrastés, interprétés sur la base des
+charges composantes associées aux classes d'occupation du sol.
+
+------------------------------------------------------------------------
+
+**Axe 1 : Gradient Naturel/Boisé vs Agricole/Cultivé**
+
++-----------------+-----------------------+-----------------------+
+| Polarité        | Description           | Charges               |
+|                 |                       | Significatives        |
++=================+=======================+=======================+
+| **Positive      | Milieux **Naturels**  | A r bustive/herbacée  |
+| (+)**           | et **Semi-Naturels**  |                       |
+|                 | (Boisés)              | :   +0.63             |
+|                 |                       |                       |
+|                 |                       | Forêts mixtes : +0.63 |
+|                 |                       |                       |
+|                 |                       | Z                     |
+|                 |                       | ones humides côtières |
+|                 |                       |                       |
+|                 |                       | :   +0.29             |
++-----------------+-----------------------+-----------------------+
+| **Négative      | Espaces **Agricoles   | Cultures : −0.527     |
+| (−)**           | Ouverts**             | Prairies : −0.30      |
++-----------------+-----------------------+-----------------------+
+
+**Interprétation :** Gradient le plus fort, opposant clairement
+l'occupation du sol de type Naturel/Boisé à l'occupation de type
+Agricole/Cultivé.
+
+------------------------------------------------------------------------
+
+**Axe 2 : Spécificité Forestière vs Agro-Artificiel**
+
+Opposition Conifères/Feuillus vs Espaces Anthropisés
+
++-----------------+-----------------------+-----------------------+
+| Polarité        | Description           | Charges               |
+|                 |                       | Significatives        |
++=================+=======================+=======================+
+| **Négative      | Milieux **Forestiers  | Conifères : −0.81     |
+| (−)**           | Stricts**             |                       |
+|                 |                       | Feuillus : −0.55      |
++-----------------+-----------------------+-----------------------+
+| **Positive      | Milieux **Agricoles** | Cultures : +0.51      |
+| (+)**           | et **Artificialisés** |                       |
+|                 |                       | Prairies : +0.43      |
+|                 |                       |                       |
+|                 |                       | Surfaces              |
+|                 |                       | artificialisées :     |
+|                 |                       | +0.29                 |
++-----------------+-----------------------+-----------------------+
+
+**Interprétation :** Oppose spécifiquement les zones forestières
+(résineux et feuillus) aux zones soumises à l'activité humaine de type
+Agricole et Urbain.
+
+------------------------------------------------------------------------
+
+**Axe 3 : Complexité Naturelle vs Artificialisation**
+
+Milieux Naturels Hétérogènes vs Impact Anthropique
+
++-----------------+-----------------------+-----------------------+
+| Polarité        | Description           | Charges               |
+|                 |                       | Significatives        |
++=================+=======================+=======================+
+| **Positive      | Milieux **Naturels    | Forêts mixtes : +0.43 |
+| (+)**           | Complexes** et        |                       |
+|                 | **Hétérogènes**       | A r b ustive/herbacée |
+|                 |                       |                       |
+|                 |                       | :   +0.42             |
++-----------------+-----------------------+-----------------------+
+| **Négative      | Surfaces à **Impact   | Surfaces              |
+| (−)**           | Anthropique**         | artificialisées :     |
+|                 |                       | −0.72                 |
+|                 |                       |                       |
+|                 |                       | Plans d'eau : −0.49   |
++-----------------+-----------------------+-----------------------+
+
+**Interprétation :** Oppose la complexité des milieux naturels
+terrestres à l'emprise humaine (artificialisation) et aux plans d'eau
+(souvent anthropiques).
+
+------------------------------------------------------------------------
+
+**Axe 4 : Gradient Littoral**
+
+Espaces Marins vs Milieux Humides Intérieurs
+
++-----------------+-----------------------+-----------------------+
+| Polarité        | Description           | Charges               |
+|                 |                       | Significatives        |
++=================+=======================+=======================+
+| **Positive      | **Espaces Marins**    | Espaces marins :      |
+| (+)**           |                       | +0.45                 |
+|                 |                       |                       |
+|                 |                       | Conifères : +0.32     |
++-----------------+-----------------------+-----------------------+
+| **Négative      | Milieux **Ouverts**   | Prairies : −0.51      |
+| (−)**           | et **Humides**        |                       |
+|                 |                       | Z ones humides        |
+|                 |                       | côtières              |
+|                 |                       |                       |
+|                 |                       | : −0.41               |
++-----------------+-----------------------+-----------------------+
+
+**Interprétation :** Influencé par la distance à la mer, il oppose les
+Espaces Marins (et secondairement les conifères) à certains milieux
+ouverts et humides côtiers.
+
+------------------------------------------------------------------------
+
+**Axe 5 : Maritimité vs Agriculture Intérieure**
+
+Opposition Marine/Agricole
+
++-----------------+-----------------------+-----------------------+
+| Polarité        | Description           | Charges               |
+|                 |                       | Significatives        |
++=================+=======================+=======================+
+| **Positive      | **Espaces Marins**    | Espaces marins        |
+| (+)**           | (Exclusif)            |                       |
+|                 |                       | :   +0.58             |
++-----------------+-----------------------+-----------------------+
+| **Négative      | Milieux **Agricoles   | Prairies : −0.42      |
+| (−)**           | Ouverts** (Intérieur) |                       |
+|                 |                       | Cultures : −0.42      |
++-----------------+-----------------------+-----------------------+
+
+**Interprétation :** Axe lié à la maritimité, opposant directement
+l'environnement marin à l'environnement agricole intérieur.
+
+:::
+
+```{r}
+# Ajout des scores PCA aux signalements
+signalements_pca <- bind_cols(
+  signalements_clc,
+  as.data.frame(pca_res$ind$coord[, 1:5]) %>%
+    setNames(paste0("PCA", 1:5))
+)
+```
+
+## Classification K-means
+
+### Détermination du nombre optimal de clusters
+
+```{r kmeans-optimal, fig.width=12, fig.height=5}
+# Données pour K-means
+data_kmeans <- as.data.frame(pca_res$ind$coord[, 1:5])
+colnames(data_kmeans) <- paste0("PCA", 1:5)
+
+# Méthode du coude
+p_elbow <- fviz_nbclust(data_kmeans, kmeans, method = "wss", k.max = 10) +
+  geom_vline(xintercept = 5, linetype = 2, color = "red") +
+  labs(
+    title = "Méthode du coude",
+    x = "Nombre de clusters (k)",
+    y = "Somme des carrés intra-cluster"
+  ) +
+  theme_minimal()
+
+print(p_elbow)
+```
+
+### Application du K-means
+
+```{r kmeans-apply}
+# Application du K-means (k = 5)
+set.seed(1234)
+k_opt <- 5
+km_res <- kmeans(data_kmeans, centers = k_opt, nstart = 25)
+
+# Ajout des clusters aux données
+signalements_km <- signalements_pca
+signalements_km$cluster <- factor(km_res$cluster)
+
+cat("🎯 Classification réalisée en", k_opt, "groupes\n")
+cat("📊 Répartition des signalements par cluster:\n")
+
+print(table(signalements_km$cluster))
+
+cat("\n💯 Qualité du clustering (between_SS / total_SS):",
+    round(km_res$betweenss / km_res$totss * 100, 2), "%\n")
+```
+
+::: {.callout-tip title="Qualité de la classification"}
+
+📐 La Métrique : Between_SS / Total_SS Formule : (Between_SS / Total_SS) × 100
+
+Total_SS = Variance totale des données (100%)
+
+Between_SS = Variance entre les clusters (séparation)
+
+Principe : Plus les clusters sont éloignés les uns des autres et
+compacts, plus le score est élevé.
+
+📊 Signification de 54.29% de la variance expliquée par la séparation
+entre clusters
+
+⚠️ 45.71% de la variance due à la dispersion interne (Within_SS)
+
+✅ Points Positifs : Structure réelle détectée dans les données Clusters
+différenciés (pas aléatoire) Score normal pour des signalements (données
+complexes)
+
+⚠️ Limites : 45% de variance reste inexpliquée donc des Clusters pas
+parfaitement séparés Possibilité d'amélioration
+
+✅ Conclusion pour des signalements, 54.29% est acceptable mais pas
+optimal. L'important est de vérifier que vos 5 groupes ont une
+interprétation cohérente au-delà du chiffre statistique.
+
+Échelle : \< 40% (faible) \| 40-60% (moyen) \| 60-80% (bon) \| \> 80%
+(excellent). 
+:::
+
+### Statistiques descriptives par cluster
+
+```{r kmeans-stats}
+library(knitr)
+library(kableExtra)
+library(dplyr)
+
+# 1. Préparation des données
+signalements_km_summary_t <- signalements_km %>%
+  st_drop_geometry() %>%
+  select(cluster, starts_with("class_")) %>%
+  group_by(cluster) %>%
+  summarise(across(starts_with("class_"), mean), .groups = "drop") %>%
+  # On s'assure que les colonnes class_1, class_2... sont dans le bon ordre
+  select(cluster, paste0("class_", 1:length(clc_labels))) %>% 
+  mutate(cluster = paste0("Cluster ", cluster)) %>%
+  tibble::column_to_rownames("cluster") %>%
+  `colnames<-`(clc_labels) %>%
+  t() %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("Type d'occupation du sol")
+
+# 2. Mise en forme avec kableExtra
+signalements_km_summary_t %>%
+  kable(
+    digits = 1,
+    format = "html", 
+    caption = "Pourcentage moyen de chaque classe CLC+ par cluster",
+    col.names = c("Type d'occupation du sol", colnames(signalements_km_summary_t)[-1])
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = FALSE,
+    position = "left"
+  ) %>%
+  column_spec(1, bold = TRUE, border_right = TRUE) %>% # Met la 1ère colonne en gras
+  row_spec(0, bold = TRUE, background = "#f2f2f2")     # En-tête grise et gras
+```
+
+::: {.callout-tip title="Typologie paysagère identifiée"}
+**Cluster 1 – Pyasages forestiers**
+
+-   Conifères très majoritaires (51,3 %),
+
+-   avec une part notable de feuillus (19,5 %) et de prairies (16,3 %).
+
+-   Très peu de surfaces artificialisées.
+
+-   👉 **Profil** : territoires majoritairement forestiers, plutôt
+    naturels ou semi-naturels, typiques de zones montagnardes ou peu
+    anthropisées.
+
+**Cluster 2 – Territoires agricoles-prairies**
+
+-   Cultures dominantes (44,0 %) et prairies importantes (22,0 %).
+
+-   Présence secondaire de conifères (21,8 %) et Artificialisation
+    faible.
+
+-   👉 **Profil** : paysages agro-pastoraux, à vocation agricole
+    marquée, avec une mosaïque cultures–prairies–forêts.
+
+**Cluster 3 – Milieux ouverts semi-naturels**
+
+-   Forte proportion de formations arbustives/herbacées (26,8 %).
+
+-   Parts équilibrées de prairiesn(20,4 %), conifères (14,0 %) et
+    surfaces artificielles (15,7 %).
+
+-   👉 **Profil :** territoires de transition, combinant espaces
+    naturels ouverts, activités humaines et urbanisation modérée (zones
+    périurbaines, friches, garrigues, landes).
+
+**Cluster 4 – Espaces fortement urbanisés**
+
+-   Surfaces artificialisées très dominantes (47,3 %).
+
+-   Compléments de prairies (18,6 %), conifères (20,5 %) et plans d’eau
+    (4,5 %).
+
+-   👉 **Profil :** zones urbaines et périurbaines et quelques espaces
+    verts ou naturels résiduels.
+
+**Cluster 5 – Paysages prairiaux et ruraux**
+
+-   Prairies très majoritaires (46,5 %).
+
+-   Parts secondaires de conifères (22,7 %), cultures (12,8 %) et
+    surfaces artificielles modérées.
+
+-   👉 **Profil :** territoires ruraux extensifs, souvent liés à
+    l’élevage, avec une anthropisation faible à modérée.
+:::
+
+## Cartographie de l'environnement de piqûre
+
+**Remplissage label selon les clusters**
+
+```{r}
+labels_carte <- c(
+  "C1 : Paysages à dominance forestière",
+  "C2 : Territoires agricols intensifs",
+  "C3 : Milieux mixtes semi-naturels",
+  "C4 : Espaces urbains et périurbains",
+  "C5 : Paysages mixtes avec prairies naturelles"
+)
+
+signalements_km$label <- labels_carte[signalements_km$cluster]
+
+```
+
+
+**Répartition par profil paysager**
+
+```{r}
+
+library(leaflet)
+library(sf)
+library(dplyr)
+
+# Reprojection en WGS84
+signalements_wgs84 <- st_transform(signalements_km, crs = 4326)
+
+# Extraction des coordonnées
+coords <- st_coordinates(signalements_wgs84)
+signalements_wgs84$lon <- coords[, 1]
+signalements_wgs84$lat <- coords[, 2]
+
+# S'assurer que label est un facteur
+signalements_wgs84$label <- as.factor(signalements_wgs84$label)
+
+# Palette de couleurs par label
+couleurs <- couleurs <- c(
+  "#2E8B57",  
+  "#FFD700",  
+  "#A8DADC", 
+  "#E63946",
+  "#7FB800"
+)
+
+pal <- colorFactor(
+  palette = couleurs,
+  domain  = levels(signalements_wgs84$label)
+)
+
+# Création de la carte Leaflet
+leaflet_map <- leaflet(signalements_wgs84) %>%
+
+  # Fonds de carte
+  addProviderTiles(
+    providers$CartoDB.Positron,
+    group = "Fond clair"
+  ) %>%
+
+  addProviderTiles(
+    providers$OpenStreetMap,
+    group = "OpenStreetMap"
+  ) %>%
+
+  addProviderTiles(
+    providers$Esri.WorldImagery,
+    group = "Satellite"
+  ) %>%
+
+  # Points catégorisés par label
+  addCircleMarkers(
+    lng = ~lon,
+    lat = ~lat,
+    radius = 6,
+    fillColor = ~pal(label),
+    fillOpacity = 0.9,
+    color = "grey20",
+    weight = 1,
+    stroke = TRUE,
+    popup = ~paste0(
+      "<b>Label : ", label, "</b><br>",
+      "Coordonnées : ", round(lon, 4), ", ", round(lat, 4)
+    )
+  ) %>%
+
+  # Légende
+  addLegend(
+    position = "bottomright",
+    pal = pal,
+    values = ~label,
+    title = "Légende",
+    opacity = 1
+  ) %>%
+
+  # Contrôle des fonds de carte
+  addLayersControl(
+    position = "bottomright",
+    baseGroups = c("OpenStreetMap", "Satellite"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+
+  # Titre
+  addControl(
+    html = "
+      <div style='background:white; padding:6px; border-radius:5px;'>
+        <h4 style='margin:0;'>Typologie paysagère des signalements</h4>
+        <p style='margin:0; font-size:12px;'>
+          pour le piqûre de tique sur les chiens
+        </p>
+      </div>",
+    position = "topright"
+  )
+
+# Affichage
+leaflet_map
+
+```
+
+**Visualisation dans l'espace PCA**
+
+```{r kmeans-biplot}
+p_km_biplot <- fviz_cluster(
+  km_res,
+  data = data_kmeans,
+  geom = "point",
+  ellipse.type = "norm",
+  palette = c("#dbffe2", "#FF0014", "#F9FF00", "#18a843", "#095FF1"),
+  ggtheme = theme_minimal(),
+  main = "Clusters dans l'espace PCA (axes 1-2)"
+)
+
+print(p_km_biplot)
+```
+
+## Synthèse des typologies paysagères
+
+```{r synthesis, message=FALSE, warning=FALSE}
+library(dplyr)
+library(sf)
+library(knitr)
+library(kableExtra)
+
+summary_clusters <- signalements_km %>%
+  st_drop_geometry() %>%
+  group_by(cluster) %>%
+  summarise(
+    `N` = n(),
+    `Urbain (%)` = mean(class_1, na.rm = TRUE),
+    `Forêt (%)` = mean(class_2 + class_3 + class_4, na.rm = TRUE),
+    `Agriculture (%)` = mean(class_7, na.rm = TRUE),
+    `Prairie (%)` = mean(class_6, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+summary_clusters %>%
+  kable(
+    digits = 1,
+    caption = "Synthèse des typologies paysagères par cluster",
+    booktabs = TRUE,
+    align = "c"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = FALSE,
+    position = "center"
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(1, bold = TRUE) %>%
+  column_spec(2, background = "#F7F7F7") %>%
+  column_spec(3:6, width = "8em")
+
+```
+
+**Répartition des signalements par envionnement de piqûre**
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+signalements_km %>%
+  count(label) %>%
+  mutate(
+    pourcentage = n / sum(n) * 100,
+    label_pct = paste0(round(pourcentage, 1), "%")
+  ) %>%
+  ggplot(aes(x = 2, y = n, fill = label)) +
+  geom_col(width = 1, color = "white") +
+  coord_polar("y") +
+  xlim(0.5, 2.5) +
+  geom_text(
+    aes(label = label_pct),
+    position = position_stack(vjust = 0.5),
+    size = 4
+  ) +
+  scale_fill_manual(
+    values = c(
+      "#2E8B57",  
+      "#FFD700",  
+      "#A8DADC", 
+      "#E63946",
+      "#7FB800"
+    )
+  ) +
+  labs(
+    title = "Taux de répartition des signalements",
+    fill = "Paysages de signalements"
+  ) +
+  theme_void() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12)
+  )
+
+
+```
+**Répartition de signalement selon paysage déclaré et profils analysés**
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(sf)
+
+# Préparer les données
+df <- signalements_km %>%
+  st_drop_geometry() %>%
+  count(cluster, environ)
+
+# Graphique à barres empilées
+ggplot(df, aes(x = cluster, y = n, fill = environ)) +
+  geom_bar(stat = "identity") +        # barres empilées
+  labs(
+    #title = "Nombre de signalements par paysage et environnement déclaré",
+    x = "Cluster",
+    y = "Nombre de signalements",
+    fill = "Environnement"
+  ) +
+  theme_minimal() +                   # thème épuré
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 1)  # rotation labels x si besoin
+  )
+
+```
+**signalements par région et environnement analysé**
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(sf)
+
+# Préparer les données
+library(ggplot2)
+library(dplyr)
+library(sf)
+
+# Palette personnalisée
+palette_label <- c(
+  "#2E8B57",  
+  "#FFD700",  
+  "#A8DADC", 
+  "#E63946",
+  "#7FB800"
+)
+
+# Préparer les données
+df <- signalements_km %>%
+  st_drop_geometry() %>%
+  count(region, label)
+
+# Graphique à barres empilées
+ggplot(df, aes(x = region, y = n, fill = label)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = palette_label) +   # 🎨 palette appliquée
+  labs(
+    x = "Région",
+    y = "Nombre de signalements",
+    fill = "profil de signalement"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+
+```
+
+------------------------------------------------------------------------------
+
+# Export des données
+
+```{r export, eval=FALSE}
+# Export du shapefile avec clusters
+st_write(
+  signalements_km,
+  "C:/Users/geographie/Documents/Master-G2M/M2-G2M/Ptut_VG_B/processing/outputs/signalements_typologie_paysagere.shp",
+  delete_dsn = TRUE,
+  quiet = TRUE
+)
+
+```
+
+
